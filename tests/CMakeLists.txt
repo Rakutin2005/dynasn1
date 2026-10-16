@@ -35,3 +35,5 @@ dynasn1_test(time SOURCES test_time.cpp)
 
 # The timestamp carrier must not depend on the platform clock already counting nanoseconds.
 dynasn1_test(portability SOURCES test_portability.cpp)
+# DATE, TIME-OF-DAY and DATE-TIME, the types X.680 added after the original set.
+dynasn1_test(datetime SOURCES test_datetime.cpp)

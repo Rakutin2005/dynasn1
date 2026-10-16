@@ -47,6 +47,9 @@ ASN1 ASN1::numericString(std::string name) { return make(Kind::numericString, st
 ASN1 ASN1::visibleString(std::string name) { return make(Kind::visibleString, std::move(name)); }
 ASN1 ASN1::utcTime(std::string name) { return make(Kind::utcTime, std::move(name)); }
 ASN1 ASN1::generalizedTime(std::string name) { return make(Kind::generalizedTime, std::move(name)); }
+ASN1 ASN1::date(std::string name) { return make(Kind::date, std::move(name)); }
+ASN1 ASN1::timeOfDay(std::string name) { return make(Kind::timeOfDay, std::move(name)); }
+ASN1 ASN1::dateTime(std::string name) { return make(Kind::dateTime, std::move(name)); }
 ASN1 ASN1::objectIdentifier(std::string name) { return make(Kind::objectIdentifier, std::move(name)); }
 ASN1 ASN1::sequence(std::string name) { return make(Kind::sequence, std::move(name)); }
 ASN1 ASN1::set(std::string name) { return make(Kind::set, std::move(name)); }

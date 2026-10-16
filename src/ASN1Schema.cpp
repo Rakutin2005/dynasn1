@@ -49,6 +49,9 @@ std::uint32_t defaultUniversalTag(Kind kind) noexcept {
         case Kind::utcTime: return 23;
         case Kind::generalizedTime: return 24;
         case Kind::visibleString: return 26;
+        case Kind::date: return 31;
+        case Kind::timeOfDay: return 32;
+        case Kind::dateTime: return 33;
         case Kind::choice:
         case Kind::reference: return kNoTag;
     }
@@ -88,12 +91,15 @@ const char *kindName(Kind kind) noexcept {
         case Kind::setOf: return "SET OF";
         case Kind::choice: return "CHOICE";
         case Kind::reference: return "REFERENCE";
+        case Kind::date: return "DATE";
+        case Kind::timeOfDay: return "TIME-OF-DAY";
+        case Kind::dateTime: return "DATE-TIME";
     }
     return "UNKNOWN";
 }
 
 Kind kindFromIndex(std::int64_t index) {
-    if (index < 0 || index > static_cast<std::int64_t>(Kind::reference))
+    if (index < 0 || index > static_cast<std::int64_t>(Kind::dateTime))
         throw ASN1SchemaError("schema description contains an unknown type kind " + std::to_string(index));
     return static_cast<Kind>(index);
 }
@@ -402,6 +408,9 @@ Schema buildMetaSchema() {
                             {"sequenceOf", static_cast<std::int64_t>(Kind::sequenceOf)},
                             {"setOf", static_cast<std::int64_t>(Kind::setOf)},
                             {"choice", static_cast<std::int64_t>(Kind::choice)},
+                            {"date", static_cast<std::int64_t>(Kind::date)},
+                            {"timeOfDay", static_cast<std::int64_t>(Kind::timeOfDay)},
+                            {"dateTime", static_cast<std::int64_t>(Kind::dateTime)},
                             {"reference", static_cast<std::int64_t>(Kind::reference)}}});
     meta.tdTagClass = builder.addLeaf(Kind::enumerated, "tagClass");
     builder.setConstraint(meta.tdTagClass,

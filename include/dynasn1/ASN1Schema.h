@@ -39,7 +39,13 @@ enum class Kind : std::uint8_t {
     sequenceOf,
     setOf,
     choice,
-    reference
+    reference,
+    // X.680 added these after the original set. They are appended, never inserted: a description
+    // stores a kind as its ordinal, so anything in the middle would renumber the ones behind it
+    // and make every description written so far unreadable.
+    date,
+    timeOfDay,
+    dateTime
 };
 
 std::uint32_t defaultUniversalTag(Kind kind) noexcept;

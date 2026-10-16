@@ -50,6 +50,19 @@ private:
 
 bool operator==(const ASN1Oid &lhs, const ASN1Oid &rhs) noexcept;
 
+// A calendar date with no time of day and no zone: the payload of an ASN.1 DATE.
+//
+// It is deliberately not a time point. A time point carries a time of day that DATE cannot hold,
+// so accepting one would mean silently dropping what the caller set; keeping the two apart turns
+// that mistake into a type error at the point where it is made.
+struct ASN1Date {
+    int year = 1970;
+    unsigned month = 1;
+    unsigned day = 1;
+
+    bool operator==(const ASN1Date &) const = default;
+};
+
 // BIT STRING payload: whole bytes plus the number of significant bits inside the last byte.
 // Unused trailing bits are always zero, as required by DER.
 struct ASN1BitString {
@@ -87,7 +100,8 @@ template <class T> const char *asn1ValueAlternativeName() noexcept { return "req
 //   OCTET STRING         -> std::vector<std::uint8_t>, ASN1FixedBytes<N> for fixed size material
 //   BIT STRING           -> ASN1BitString
 //   character strings    -> std::string
-//   UTCTime, GenTime     -> std::chrono::system_clock::time_point
+//   UTCTime, GeneralizedTime, TIME-OF-DAY, DATE-TIME -> ASN1Value::Timestamp
+//   DATE                 -> ASN1Date
 //   OBJECT IDENTIFIER    -> ASN1Oid
 //   SEQUENCE, SET        -> Sequence  (std::vector<ASN1Field>, in schema order)
 //   SEQUENCE OF, SET OF  -> List      (std::vector<ASN1Value>)
@@ -115,12 +129,13 @@ public:
         objectIdentifier,
         sequence,
         list,
-        choice
+        choice,
+        date
     };
 
     using Storage = std::variant<bool, std::int64_t, std::uint64_t, ASN1BigInt, std::nullptr_t,
                                  std::vector<std::uint8_t>, ASN1BitString, std::string, Timestamp,
-                                 ASN1Oid, Sequence, List, Choice>;
+                                 ASN1Oid, Sequence, List, Choice, ASN1Date>;
 
     ASN1Value() noexcept : value_(nullptr) {}
     ASN1Value(std::nullptr_t) noexcept : value_(nullptr) {}
@@ -165,6 +180,7 @@ public:
     ASN1Value(Sequence v) : value_(std::move(v)) {}
     ASN1Value(List v) : value_(std::move(v)) {}
     ASN1Value(Choice v) : value_(std::move(v)) {}
+    ASN1Value(ASN1Date v) : value_(v) {}
 
     Type type() const noexcept;
     static const char *typeNameOf(Type type) noexcept;
@@ -196,6 +212,7 @@ public:
     const ASN1BitString &asBits() const { return as<ASN1BitString>(); }
     const std::string &asString() const { return as<std::string>(); }
     Timestamp asTime() const { return as<Timestamp>(); }
+    const ASN1Date &asDate() const { return as<ASN1Date>(); }
     const ASN1Oid &asOid() const { return as<ASN1Oid>(); }
     const Sequence &asSequence() const { return as<Sequence>(); }
     const List &asList() const { return as<List>(); }
@@ -249,6 +266,9 @@ template <> inline const char *asn1ValueAlternativeName<std::string>() noexcept 
 template <>
 inline const char *asn1ValueAlternativeName<std::chrono::system_clock::time_point>() noexcept {
     return "a time value";
+}
+template <> inline const char *asn1ValueAlternativeName<ASN1Date>() noexcept {
+    return "DATE";
 }
 template <> inline const char *asn1ValueAlternativeName<ASN1Oid>() noexcept {
     return "OBJECT IDENTIFIER";

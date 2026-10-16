@@ -134,7 +134,8 @@ ASN1Value::Type ASN1Value::type() const noexcept {
         case 9: return Type::objectIdentifier;
         case 10: return Type::sequence;
         case 11: return Type::list;
-        default: return Type::choice;
+        case 12: return Type::choice;
+        default: return Type::date;
     }
 }
 
@@ -152,6 +153,7 @@ const char *ASN1Value::typeNameOf(ASN1Value::Type type) noexcept {
         case ASN1Value::Type::sequence: return "SEQUENCE";
         case ASN1Value::Type::list: return "SEQUENCE OF";
         case ASN1Value::Type::choice: return "CHOICE";
+        case ASN1Value::Type::date: return "DATE";
     }
     return "UNKNOWN";
 }

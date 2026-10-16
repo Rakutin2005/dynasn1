@@ -59,6 +59,9 @@ public:
     static ASN1 visibleString(std::string name = {});
     static ASN1 utcTime(std::string name = {});
     static ASN1 generalizedTime(std::string name = {});
+    static ASN1 date(std::string name = {});
+    static ASN1 timeOfDay(std::string name = {});
+    static ASN1 dateTime(std::string name = {});
     static ASN1 objectIdentifier(std::string name = {});
     static ASN1 enumerated(std::string name, std::initializer_list<asn1detail::NamedNumber> numbers = {});
     static ASN1 sequence(std::string name);

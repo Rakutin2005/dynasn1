@@ -87,8 +87,8 @@ target_link_libraries(your_target PRIVATE dynasn1::dynasn1)
 
 `BOOLEAN`, `INTEGER` of any width, `NULL`, `OCTET STRING`, `BIT STRING`, the character strings
 (`UTF8String`, `IA5String`, `PrintableString`, `NumericString`, `VisibleString`), `UTCTime`,
-`GeneralizedTime`, `OBJECT IDENTIFIER`, `ENUMERATED`, `SEQUENCE`, `SET`, `SEQUENCE OF`,
-`SET OF`, `CHOICE`, and named types with recursive references.
+`GeneralizedTime`, `DATE`, `TIME-OF-DAY`, `DATE-TIME`, `OBJECT IDENTIFIER`, `ENUMERATED`,
+`SEQUENCE`, `SET`, `SEQUENCE OF`, `SET OF`, `CHOICE`, and named types with recursive references.
 
 Constraints: `SIZE`, integer value range, named bits, named numbers. Members may be optional,
 carry a default, and carry a non universal tag.
@@ -105,7 +105,8 @@ carry a default, and carry a non universal tag.
 | `OCTET STRING` | `std::vector<std::uint8_t>`, `ASN1FixedBytes<N>` |
 | `BIT STRING` | `ASN1BitString` |
 | character strings | `std::string` |
-| `UTCTime`, `GeneralizedTime` | `ASN1Value::Timestamp` |
+| `UTCTime`, `GeneralizedTime`, `TIME-OF-DAY`, `DATE-TIME` | `ASN1Value::Timestamp` |
+| `DATE` | `ASN1Date` |
 | `OBJECT IDENTIFIER` | `ASN1Oid` |
 | `SEQUENCE`, `SET` | `ASN1Value::Sequence` |
 | `SEQUENCE OF`, `SET OF` | `ASN1Value::List` |
@@ -139,6 +140,22 @@ does not depend on the platform clock. Values at any clock precision convert in.
 value and with no trailing zeros, as X.690 11.7.4 requires. `UTCTime` stays exactly 13 octets and
 covers 1950..2049. A nanosecond timestamp therefore covers roughly 1677..2262; outside that an
 encoding is refused rather than silently rounded.
+
+### Calendar dates
+
+`ASN1Date` carries a `DATE`: a year, a month and a day, nothing else. It is deliberately not a
+time point. A time point carries a time of day that `DATE` has nowhere to put, so accepting one
+would mean dropping it silently; keeping them apart turns that mistake into a type error at the
+point where it is made.
+
+`DATE` is eight octets, `YYYYMMDD`, with no separators and no time zone. `TIME-OF-DAY` is
+`HHMMSS[.f]Z` and `DATE-TIME` is `YYYYMMDDHHMMSS[.f]Z`; both carry the seconds and the `Z` that DER
+requires, and a fraction with no trailing zeros. An impossible date is refused on the way in and
+on the way out.
+
+The three were appended to the kind enumeration, never inserted into it: a description stores a
+kind as its ordinal, so anything in the middle would renumber the types behind it and make every
+description written so far unreadable.
 
 ### Fixed size binary values
 

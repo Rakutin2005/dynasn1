@@ -154,6 +154,11 @@ std::chrono::system_clock::time_point timeOf(const Node &node, const ASN1Value &
     typeMismatch(node, "a time value", value);
 }
 
+const ASN1Date &dateOf(const Node &node, const ASN1Value &value) {
+    if (const auto *v = value.getIf<ASN1Date>()) return *v;
+    typeMismatch(node, "a DATE", value);
+}
+
 // INTEGER and ENUMERATED accept the narrow carriers and, when they do not reach, ASN1BigInt.
 bool integerOf(const Node &node, const ASN1Value &value, bool &isBig, const ASN1BigInt *&big,
                bool &isSigned, std::int64_t &signedValue, std::uint64_t &unsignedValue) {
@@ -785,8 +790,18 @@ char *writeDigits(char *out, int value, int width) noexcept {
 // Writes the textual form into `out`, which must have room for 40 characters, and returns the
 // number of characters written. Used by both passes of the encoder, so the size that was measured
 // is the size that is written.
+//
+// UTCTime          YYMMDDHHMMSSZ                          X.690 11.7.1, reduced by 11.8.2
+// GeneralizedTime  YYYYMMDDHHMMSS[.f]Z                    X.690 11.7.3, reduced by 11.8.4
+// TIME-OF-DAY      HHMMSS[.f]Z                            X.690 11.7.2, reduced by 11.8.3
+// DATE-TIME        YYYYMMDDHHMMSS[.f]Z                    X.690 11.7.4, reduced by 11.8.5
+//
+// DER always carries the seconds and always ends with Z; the fraction carries no trailing zeros,
+// and a zero fraction is written as no fraction at all.
 std::size_t formatTimeInto(Kind kind, std::chrono::system_clock::time_point value, char *out) {
     const bool utc = kind == Kind::utcTime;
+    const bool timeOnly = kind == Kind::timeOfDay;
+
     const std::int64_t nanoseconds =
             std::chrono::duration_cast<std::chrono::nanoseconds>(value.time_since_epoch()).count();
     std::int64_t seconds = nanoseconds / 1'000'000'000;
@@ -803,10 +818,10 @@ std::size_t formatTimeInto(Kind kind, std::chrono::system_clock::time_point valu
         --days;
         rest += 86400;
     }
-    std::int64_t year = 0;
-    std::uint32_t month = 0;
-    std::uint32_t day = 0;
-    civilFromDays(days, year, month, day);
+    std::int64_t year = 1970;
+    std::uint32_t month = 1;
+    std::uint32_t day = 1;
+    if (!timeOnly) civilFromDays(days, year, month, day);
 
     const int hour = static_cast<int>(rest / 3600);
     const int minute = static_cast<int>((rest / 60) % 60);
@@ -818,15 +833,17 @@ std::size_t formatTimeInto(Kind kind, std::chrono::system_clock::time_point valu
 
     char buffer[40];
     char *end = buffer;
-    end = writeDigits(end, static_cast<int>(utc ? year % 100 : year), utc ? 2 : 4);
-    end = writeDigits(end, static_cast<int>(month), 2);
-    end = writeDigits(end, static_cast<int>(day), 2);
+    if (!timeOnly) {
+        end = writeDigits(end, static_cast<int>(utc ? year % 100 : year), utc ? 2 : 4);
+        end = writeDigits(end, static_cast<int>(month), 2);
+        end = writeDigits(end, static_cast<int>(day), 2);
+    }
     end = writeDigits(end, hour, 2);
     end = writeDigits(end, minute, 2);
     end = writeDigits(end, second, 2);
     if (!utc && fraction != 0) {
-        // X.690 11.7.4: the fraction is written with as few digits as possible, and a zero
-        // fraction is written as no fraction at all.
+        // X.690 11.7: the fraction is written with as few digits as possible, and a zero fraction
+        // is written as no fraction at all.
         *end++ = '.';
         char digits[10];
         char *digitEnd = writeDigits(digits, static_cast<int>(fraction), 9);
@@ -838,9 +855,25 @@ std::size_t formatTimeInto(Kind kind, std::chrono::system_clock::time_point valu
     return static_cast<std::size_t>(end - buffer);
 }
 
+// DATE, X.690 11.7.1: exactly eight digits, no separators and no time zone.
+std::size_t formatDateInto(const ASN1Date &value, char *out) {
+    char buffer[8];
+    char *end = writeDigits(buffer, value.year, 4);
+    end = writeDigits(end, static_cast<int>(value.month), 2);
+    end = writeDigits(end, static_cast<int>(value.day), 2);
+    std::memcpy(out, buffer, 8);
+    return 8;
+}
+
 std::chrono::system_clock::time_point parseTime(Kind kind, std::span<const std::uint8_t> data) {
     const bool utc = kind == Kind::utcTime;
-    const char *name = utc ? "UTCTime" : "GeneralizedTime";
+    const bool timeOnly = kind == Kind::timeOfDay;
+    const char *name = kindName(kind);
+
+    // Where the time of day starts, and where the decimal mark sits when there is a fraction.
+    const std::size_t digitsBeforeTime = timeOnly ? 0u : (utc ? 6u : 8u);
+    const std::size_t plainLength = digitsBeforeTime + 7;  // digits, then the Z
+    const std::size_t markIndex = digitsBeforeTime + 6;   // where '.' goes
 
     std::size_t fractionDigits = 0;
     if (utc) {
@@ -848,27 +881,25 @@ std::chrono::system_clock::time_point parseTime(Kind kind, std::span<const std::
             throw ASN1DecodeError("UTCTime must be exactly 13 characters in DER, it has no fraction",
                                   0);
     } else {
-        // 15 characters without a fraction (14 digits and the Z), or 17 plus one to nine fraction digits,
-        // the decimal mark sitting at index 14.
-        if (data.size() != 15 && (data.size() < 17 || data.size() > 25))
-            throw ASN1DecodeError("GeneralizedTime must be YYYYMMDDHHMMSS[.f{1,9}]Z", 0);
-        if (data.size() > 15) {
-            if (data[14] != '.')
+        // Either the plain form, or the digits, a decimal mark, one to nine fraction digits and the
+        // Z: the Z and the decimal mark replace nothing, so the smallest such form is two longer
+        // than the plain one and the largest is ten.
+        if (data.size() != plainLength &&
+            (data.size() < plainLength + 2 || data.size() > plainLength + 10))
+            throw ASN1DecodeError(std::string(name) + " must be " +
+                                      (timeOnly ? std::string("HHMMSS[.f{1,9}]Z")
+                                                : std::string("YYYYMMDDHHMMSS[.f{1,9}]Z")),
+                                  0);
+        if (data.size() > plainLength) {
+            if (data[markIndex] != '.')
                 throw ASN1DecodeError("DER requires '.' as the decimal mark of a fraction", 0);
-            fractionDigits = data.size() - 16;
+            fractionDigits = data.size() - plainLength - 1;
         }
     }
     if (data.back() != 'Z')
         throw ASN1DecodeError("DER requires a time to end with 'Z' (UTC); local times and time zone "
                               "offsets are not allowed",
                               0);
-
-    const std::size_t yearOffset = 0;
-    const std::size_t monthOffset = utc ? 2 : 4;
-    const std::size_t dayOffset = utc ? 4 : 6;
-    const std::size_t hourOffset = utc ? 6 : 8;
-    const std::size_t minuteOffset = utc ? 8 : 10;
-    const std::size_t secondOffset = utc ? 10 : 12;
 
     auto digits = [&](std::size_t offset, std::size_t count) -> int {
         int result = 0;
@@ -881,40 +912,45 @@ std::chrono::system_clock::time_point parseTime(Kind kind, std::span<const std::
         return result;
     };
 
-    const int shortYear = utc ? digits(yearOffset, 2) : 0;
-    const int year = utc ? (shortYear >= 50 ? 1900 + shortYear : 2000 + shortYear)
-                         : digits(yearOffset, 4);
-    const int month = digits(monthOffset, 2);
-    const int day = digits(dayOffset, 2);
-    const int hour = digits(hourOffset, 2);
-    const int minute = digits(minuteOffset, 2);
-    const int second = digits(secondOffset, 2);
+    int year = 1970;
+    unsigned month = 1;
+    unsigned day = 1;
+    if (!timeOnly) {
+        const int shortYear = utc ? digits(0, 2) : 0;
+        year = utc ? (shortYear >= 50 ? 1900 + shortYear : 2000 + shortYear) : digits(0, 4);
+        month = static_cast<unsigned>(digits(utc ? 2 : 4, 2));
+        day = static_cast<unsigned>(digits(utc ? 4 : 6, 2));
+    }
+    const int hour = digits(digitsBeforeTime, 2);
+    const int minute = digits(digitsBeforeTime + 2, 2);
+    const int second = digits(digitsBeforeTime + 4, 2);
 
-    if (month < 1 || month > 12)
-        throw ASN1DecodeError(std::string(name) + " month out of range", 0);
-    if (day < 1 || day > static_cast<int>(daysInMonth(year, static_cast<unsigned>(month))))
+    if (month < 1 || month > 12) throw ASN1DecodeError(std::string(name) + " month out of range", 0);
+    if (day < 1 || day > daysInMonth(year, month))
         throw ASN1DecodeError(std::string(name) + " day out of range", 0);
     if (hour > 23 || minute > 59 || second > 59)
         throw ASN1DecodeError(std::string(name) + " time of day out of range", 0);
 
     std::int64_t nanoseconds = 0;
     if (fractionDigits != 0) {
-        // X.690 11.7.4: the fraction carries no trailing zeros, otherwise it is not canonical.
+        // X.690 11.7: the fraction carries no trailing zeros, otherwise it is not canonical.
         if (data[data.size() - 2] == '0')
-            throw ASN1DecodeError("DER requires the fraction of a time to be written without "
-                                  "trailing zeros",
-                                  0);
+            throw ASN1DecodeError(
+                    "DER requires the fraction of a time to be written without trailing zeros", 0);
         for (std::size_t i = 0; i < fractionDigits; ++i) {
-            const std::uint8_t byte = data[15 + i];
+            const std::uint8_t byte = data[markIndex + 1 + i];
             if (byte < '0' || byte > '9')
-                throw ASN1DecodeError("GeneralizedTime fraction contains a non digit character", 0);
+                throw ASN1DecodeError(std::string(name) + " fraction contains a non digit character",
+                                      0);
             nanoseconds = nanoseconds * 10 + (byte - '0');
         }
         for (std::size_t i = fractionDigits; i < 9; ++i) nanoseconds *= 10;
     }
 
-    const std::int64_t days = daysFromCivil(year, static_cast<unsigned>(month),
-                                            static_cast<unsigned>(day));
+    // TIME-OF-DAY has no date of its own; it is anchored to the epoch day so that the returned
+    // value carries the time in the fields a caller reads.
+    const std::int64_t days =
+            timeOnly ? 0 : daysFromCivil(year, month, day);
     const std::int64_t total = days * 86400 + hour * 3600 + minute * 60 + second;
     const std::int64_t scaled = total * 1'000'000'000 + nanoseconds;
     if (scaled < std::numeric_limits<std::int64_t>::min() ||
@@ -922,6 +958,30 @@ std::chrono::system_clock::time_point parseTime(Kind kind, std::span<const std::
         throw ASN1DecodeError(std::string(name) + " is outside the nanosecond range of 1677..2262",
                               0);
     return std::chrono::system_clock::time_point{std::chrono::nanoseconds{scaled}};
+}
+
+// DATE, X.690 11.7.1: exactly eight digits, no separators, no time zone.
+ASN1Date parseDate(std::span<const std::uint8_t> data) {
+    if (data.size() != 8)
+        throw ASN1DecodeError("DATE must be exactly 8 characters, YYYYMMDD", 0);
+
+    auto group = [&](std::size_t offset, std::size_t count) {
+        int value = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::uint8_t byte = data[offset + i];
+            if (byte < '0' || byte > '9')
+                throw ASN1DecodeError("DATE contains a non digit character", 0);
+            value = value * 10 + (byte - '0');
+        }
+        return value;
+    };
+
+    const int year = group(0, 4);
+    const unsigned month = static_cast<unsigned>(group(4, 2));
+    const unsigned day = static_cast<unsigned>(group(6, 2));
+    if (month < 1 || month > 12) throw ASN1DecodeError("DATE month out of range", 0);
+    if (day < 1 || day > daysInMonth(year, month)) throw ASN1DecodeError("DATE day out of range", 0);
+    return ASN1Date{year, month, day};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -975,9 +1035,22 @@ std::size_t leafContentSize(const Node &n, const ASN1Value &value) {
         case Kind::objectIdentifier:
             return oidContentSize(oidOf(n, value));
         case Kind::utcTime:
-        case Kind::generalizedTime: {
+        case Kind::generalizedTime:
+        case Kind::timeOfDay:
+        case Kind::dateTime: {
             char buffer[40];
             return formatTimeInto(n.kind, timeOf(n, value), buffer);
+        }
+        case Kind::date: {
+            char buffer[8];
+            const ASN1Date &date = dateOf(n, value);
+            if (date.month < 1 || date.month > 12 ||
+                date.day < 1 || date.day > daysInMonth(date.year, date.month))
+                throw ASN1ValueError("field '" + labelOf(n) + "' holds an impossible date " +
+                                     std::to_string(date.year) + "-" +
+                                     std::to_string(date.month) + "-" +
+                                     std::to_string(date.day));
+            return formatDateInto(date, buffer);
         }
         default:
             break;
@@ -1094,9 +1167,17 @@ void writeLeafContent(DerWriter &writer, const Node &n, const ASN1Value &value) 
             writeOid(writer, oidOf(n, value));
             return;
         case Kind::utcTime:
-        case Kind::generalizedTime: {
+        case Kind::generalizedTime:
+        case Kind::timeOfDay:
+        case Kind::dateTime: {
             char buffer[40];
             const std::size_t length = formatTimeInto(n.kind, timeOf(n, value), buffer);
+            writer.bytes({reinterpret_cast<const std::uint8_t *>(buffer), length});
+            return;
+        }
+        case Kind::date: {
+            char buffer[8];
+            const std::size_t length = formatDateInto(dateOf(n, value), buffer);
             writer.bytes({reinterpret_cast<const std::uint8_t *>(buffer), length});
             return;
         }
@@ -1321,7 +1402,11 @@ ASN1Value decodeValue(const Schema &schema, std::int32_t node, std::span<const s
             return decodeOid(content, offset, path);
         case Kind::utcTime:
         case Kind::generalizedTime:
+        case Kind::timeOfDay:
+        case Kind::dateTime:
             return ASN1Value(parseTime(n.kind, content));
+        case Kind::date:
+            return ASN1Value(parseDate(content));
         default:
             break;
     }
