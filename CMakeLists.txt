@@ -44,10 +44,13 @@ target_include_directories(dynasn1
 
 target_compile_features(dynasn1 PUBLIC cxx_std_20)
 
+# A module is its own shared object and links this library, so the objects have to be position
+# independent even when the library itself is static.
 set_target_properties(dynasn1 PROPERTIES
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
+        POSITION_INDEPENDENT_CODE ON
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
         EXPORT_NAME dynasn1)
